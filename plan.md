@@ -54,10 +54,8 @@ This document outlines a step-by-step plan to implement a Candidate Ranking Syst
 
 ### 3.3 Bias Detection & Mitigation Module
 
-* Analyze score distribution across demographics (e.g., gender, ethnicity)
-* Implement statistical checks (e.g., disparate impact ratio)
-* Apply corrective adjustments or flag anomalies
-* Log metrics for monitoring
+* Analyse the social profiles like Github, Linkedin etc. 
+* Crawl the social media profile to check if the things mentioned in profile are genuine or not.
 
 ### 3.4 Explanation & Visualization Service
 
@@ -154,10 +152,7 @@ CREATE TABLE bias_metric (
 
 ## 10. Deployment & Monitoring
 
-* **Dockerize** the FastAPI application.
-* Use **GitHub Actions** for CI/CD: linting, tests, container build.
-* Deploy to **Kubernetes** / **AWS ECS Fargate**.
-* Monitor with **Prometheus** (collect latency, error rates) and **Grafana** dashboards.
+* **Dockerize** the FastAPI application and run on localhost.
 
 ## 11. How Cursor Helps
 
