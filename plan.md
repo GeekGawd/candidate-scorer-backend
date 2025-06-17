@@ -17,7 +17,7 @@ The system will be designed with a modular architecture, centered around a new `
 ```
 +----------------+      +---------------------+      +------------------+
 |  FastAPI REST  | <--> |  Business Logic     | <--> |  Database        |
-|  Endpoints     |      |  Layer              |      |  (PostgreSQL)    |
+|  Endpoints     |      |  Layer              |      |  (SQLITE3)    |
 +----------------+      +---------------------+      +------------------+
                              |           ^
                              v           |
@@ -79,68 +79,138 @@ The system will be designed with a modular architecture, centered around a new `
 
 ## 4. API Design
 
+### 4.1 Primary User API (Simplified)
+
 | Method | Endpoint                             | Description                                            |
 | ------ | ------------------------------------ | ------------------------------------------------------ |
-| POST   | `/config/generate`                   | Generates a `config_json` from a natural text description |
+| POST   | `/score`                             | **Main API**: Upload resume (Word/PDF) + job description, get comprehensive scoring results |
+
+**Request Format:**
+```json
+{
+  "resume_file": "base64_encoded_file_content",
+  "file_type": "pdf|docx",
+  "job_description": "text description of the role",
+  "candidate_info": {
+    "github_url": "optional",
+    "linkedin_url": "optional", 
+    "portfolio_url": "optional"
+  }
+}
+```
+
+**Response Format:**
+```json
+{
+  "candidate_id": "unique_id",
+  "total_score": 85.5,
+  "detailed_scores": {
+    "technical_skills": {"score": 90, "evidence": "..."},
+    "experience": {"score": 80, "evidence": "..."},
+    "education": {"score": 85, "evidence": "..."}
+  },
+  "verification_summary": "Cross-referenced GitHub and LinkedIn...",
+  "explanation": "Detailed reasoning for the score...",
+  "bias_analysis": "No bias detected in evaluation",
+  "recommendations": ["Suggest areas for improvement..."],
+  "visualization_data": {
+    "radar_chart": [...],
+    "bar_chart": [...]
+  }
+}
+```
+
+### 4.2 Administrative APIs (Optional/Internal)
+
+| Method | Endpoint                             | Description                                            |
+| ------ | ------------------------------------ | ------------------------------------------------------ |
 | GET    | `/config/{role}`                     | Retrieve scoring configuration for a role              |
 | PUT    | `/config/{role}`                     | Update scoring configuration                           |
-| POST   | `/score/{role}`                      | Submit candidate data, return raw scores               |
-| GET    | `/rank/{role}`                       | Return ranked list of candidates              |
-| GET    | `/rank/{role}/explain/{candidateId}` | Return detailed explanation for one candidate |
-| GET    | `/metrics/bias`                      | Retrieve bias metrics and reports             |
+| GET    | `/candidates`                        | List all evaluated candidates                          |
+| GET    | `/metrics/bias`                      | Retrieve bias metrics and reports                      |
 
-## 5. Database Schema (PostgreSQL)
+## 5. Database Schema (SQLITE3)
 
 ```sql
--- Roles & Configurations
-CREATE TABLE role_config (
-  role_id      SERIAL PRIMARY KEY,
-  role_name    TEXT UNIQUE NOT NULL,
-  config_json  JSONB NOT NULL,
-  updated_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Candidates
+-- Candidates (stores resume and extracted data)
 CREATE TABLE candidate (
-  id           SERIAL PRIMARY KEY,
-  profile_json JSONB NOT NULL,
-  created_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  id                SERIAL PRIMARY KEY,
+  resume_text       TEXT NOT NULL,
+  resume_filename   TEXT,
+  original_file     BYTEA,  -- Store original file for reference
+  job_description   TEXT NOT NULL,
+  profile_urls      JSONB,  -- GitHub, LinkedIn, portfolio URLs
+  verification_data JSONB,  -- Crawled profile data
+  created_at        TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Scores
-CREATE TABLE candidate_score (
-  candidate_id INTEGER REFERENCES candidate(id),
-  role_id      INTEGER REFERENCES role_config(role_id),
-  raw_scores   JSONB,
-  total_score  FLOAT,
-  scored_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  PRIMARY KEY (candidate_id, role_id)
+-- Evaluation Results (stores comprehensive scoring)
+CREATE TABLE evaluation_result (
+  id               SERIAL PRIMARY KEY,
+  candidate_id     INTEGER REFERENCES candidate(id),
+  total_score      FLOAT NOT NULL,
+  detailed_scores  JSONB NOT NULL,  -- Breakdown by category
+  explanation      TEXT NOT NULL,
+  verification_summary TEXT,
+  bias_analysis    TEXT,
+  recommendations  JSONB,
+  visualization_data JSONB,
+  evaluated_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Bias Metrics
-CREATE TABLE bias_metric (
-  metric_id    SERIAL PRIMARY KEY,
-  role_id      INTEGER REFERENCES role_config(role_id),
-  metric_name  TEXT,
-  metric_value JSONB,
-  recorded_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- Bias Tracking (for monitoring and improvement)
+CREATE TABLE bias_tracking (
+  id              SERIAL PRIMARY KEY,
+  evaluation_id   INTEGER REFERENCES evaluation_result(id),
+  job_description TEXT,
+  bias_flags      JSONB,
+  recorded_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 ```
 
-## 6. Scoring Algorithm Design
+**Simplified Schema Benefits:**
+- No complex role configuration management
+- Direct storage of file content and results
+- Everything linked to individual evaluations
+- Bias tracking for continuous improvement
 
-1.  **Load role configuration** and LLM scoring rubric from `role_config.config_json`.
-2.  **For each candidate**, prepare a detailed prompt including the role description, scoring rubric, and the candidate's profile data.
-3.  **Invoke the `LLM Integration Service`** with the composed prompt.
-4.  **The LLM will**:
-    *   Analyze the provided materials.
-    *   Generate a comprehensive evaluation as a structured JSON object, including:
-        *   An overall suitability score (e.g., 1-100).
-        *   A breakdown of scores for each key competency.
-        *   A concise rationale for its assessment.
-        *   Direct quotes or evidence from the profile to support its findings.
-5.  **Receive and validate** the LLM's JSON response.
-6.  **Store the detailed LLM output** (`raw_scores`) and the main score (`total_score`) in the `candidate_score` table.
+## 6. Single API Workflow Design
+
+When a user calls `POST /score`, the following happens automatically in the background:
+
+1.  **File Processing**: 
+    *   Extract text from uploaded Word/PDF resume using libraries like `python-docx` or `PyPDF2`
+    *   Parse and clean the extracted text
+
+2.  **Dynamic Configuration Generation**:
+    *   Use LLM to analyze the job description and generate a scoring configuration automatically
+    *   No need for pre-stored role configs - everything is dynamic based on the job description
+
+3.  **Profile Verification** (if URLs provided):
+    *   Crawl GitHub, LinkedIn, or portfolio URLs
+    *   Cross-reference information with resume using LLM
+    *   Generate verification summary
+
+4.  **Comprehensive Scoring**:
+    *   Prepare detailed prompt with job description, resume text, and verification data
+    *   Invoke LLM Integration Service for holistic evaluation
+    *   Get structured JSON with scores, evidence, and explanations
+
+5.  **Bias Analysis**:
+    *   Run bias detection on the job description and scoring process
+    *   Include bias analysis in the response
+
+6.  **Response Generation**:
+    *   Compile all results into a single comprehensive response
+    *   Generate visualization-ready data
+    *   Store candidate data and scores in database
+    *   Return complete evaluation to user
+
+**Key Benefits of Single API Approach:**
+- **Simplicity**: One call does everything
+- **No Configuration Management**: Dynamic scoring based on job description
+- **Immediate Results**: No need to manage roles, configs, or multi-step processes
+- **File Upload Support**: Direct Word/PDF processing
 
 ## 7. Verification & Fairness Workflow
 
@@ -152,12 +222,12 @@ CREATE TABLE bias_metric (
 
 ## 8. Explanation & Visualization
 
-*   **Explanation Endpoint** `/rank/{role}/explain/{candidateId}`:
+All explanation and visualization data is included directly in the single `/score` API response:
 
-  * Return JSON with breakdown: skills, weights, experience impact.
-*   **Visualization Payload**:
-
-  * Chart-ready data arrays for front-end bar and radar charts.
+*   **Detailed Explanation**: Human-readable breakdown of why the candidate received their score
+*   **Evidence-Based Scoring**: Direct quotes and references from the resume supporting each score
+*   **Visualization Data**: Ready-to-use JSON arrays for front-end charts (bar charts, radar charts)
+*   **Recommendations**: Actionable suggestions for candidate improvement
 
 ## 9. Testing Strategy
 

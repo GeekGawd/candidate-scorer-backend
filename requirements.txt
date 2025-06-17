@@ -1,2 +1,14 @@
 fastapi
-uvicorn 
+uvicorn
+sqlalchemy
+pydantic
+python-multipart
+pypdf
+python-docx
+requests
+python-decouple
+google-genai
+beautifulsoup4
+lxml
+aiofiles
+httpx 
