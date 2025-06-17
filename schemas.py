@@ -2,17 +2,11 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, List, Any
 from datetime import datetime
 
-# Request Models
-class CandidateInfoRequest(BaseModel):
+# Form-data Request Models (no longer need ScoreRequest as we'll use Form parameters)
+class CandidateInfoForm(BaseModel):
     github_url: Optional[str] = None
     linkedin_url: Optional[str] = None
     portfolio_url: Optional[str] = None
-
-class ScoreRequest(BaseModel):
-    resume_file: str = Field(..., description="Base64 encoded file content")
-    file_type: str = Field(..., description="File type: 'pdf' or 'docx'")
-    job_description: str = Field(..., description="Text description of the role")
-    candidate_info: Optional[CandidateInfoRequest] = None
 
 # Response Models
 class DetailedScore(BaseModel):

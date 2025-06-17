@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
+from fastapi import UploadFile
 
 from service.file_processor import FileProcessor
 from service.llm_service import LLMService
@@ -19,31 +20,30 @@ class ScoringService:
     
     async def score_candidate(
         self, 
-        resume_file: str, 
-        file_type: str, 
+        resume_file: UploadFile, 
         job_description: str,
-        candidate_info: Optional[Dict[str, str]] = None,
-        resume_filename: Optional[str] = None
+        candidate_info: Optional[Dict[str, str]] = None
     ) -> Tuple[str, bytes, Dict[str, Any]]:
         """
         Complete candidate scoring workflow
         
         Args:
-            resume_file: Base64 encoded resume file
-            file_type: File type (pdf or docx)
+            resume_file: FastAPI UploadFile object
             job_description: Job description text
             candidate_info: Optional candidate profile URLs
-            resume_filename: Original filename
         
         Returns:
             Tuple of (resume_text, file_bytes, evaluation_result)
         """
         try:
-            # Step 1: Process resume file
-            logger.info("Processing resume file...")
-            resume_text, file_bytes = self.file_processor.process_resume_file(
-                resume_file, file_type, resume_filename
-            )
+            # Step 1: Validate and process resume file
+            logger.info(f"Processing resume file: {resume_file.filename}")
+            
+            # Validate file size
+            self.file_processor.validate_file_size(resume_file, max_size_mb=10)
+            
+            # Extract text and get file content
+            resume_text, file_bytes = await self.file_processor.process_resume_file(resume_file)
             
             # Step 2: Verify candidate profiles (if provided)
             verification_data = {}

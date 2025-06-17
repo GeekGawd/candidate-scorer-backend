@@ -11,4 +11,5 @@ google-genai
 beautifulsoup4
 lxml
 aiofiles
-httpx 
+httpx
+reportlab 

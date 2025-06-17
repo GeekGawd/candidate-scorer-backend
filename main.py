@@ -1,11 +1,12 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import logging
 from contextlib import asynccontextmanager
+from typing import Optional
 
 # Import schemas and models
-from schemas import ScoreRequest, ScoreResponse, ErrorResponse
+from schemas import ScoreResponse, ErrorResponse
 from models import Candidate, EvaluationResult, BiasTracking
 from database import get_db, create_tables
 from service.scoring_service import ScoringService
@@ -55,8 +56,9 @@ async def root():
         "version": "1.0.0",
         "status": "running",
         "endpoints": {
-            "score": "/score - POST - Main scoring endpoint",
+            "score": "/score - POST - Main scoring endpoint (form-data)",
             "health": "/health - GET - Health check",
+            "candidates": "/candidates - GET - List evaluated candidates",
             "docs": "/docs - GET - API documentation"
         }
     }
@@ -76,7 +78,11 @@ async def health_check():
 
 @app.post("/score", response_model=ScoreResponse)
 async def score_candidate(
-    request: ScoreRequest,
+    resume_file: UploadFile = File(..., description="Resume file (PDF or DOCX)"),
+    job_description: str = Form(..., description="Job description text"),
+    github_url: Optional[str] = Form(None, description="GitHub profile URL"),
+    linkedin_url: Optional[str] = Form(None, description="LinkedIn profile URL"),
+    portfolio_url: Optional[str] = Form(None, description="Portfolio website URL"),
     db: Session = Depends(get_db)
 ):
     """
@@ -85,33 +91,44 @@ async def score_candidate(
     Upload a resume file and job description to get comprehensive candidate evaluation
     """
     try:
-        logger.info(f"Received scoring request for {request.file_type} file")
+        logger.info(f"Received scoring request for file: {resume_file.filename}")
         
-        # Extract candidate info
+        # Validate file type
+        if not resume_file.filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No filename provided"
+            )
+        
+        file_extension = resume_file.filename.lower().split('.')[-1]
+        if file_extension not in ['pdf', 'docx']:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unsupported file type. Only PDF and DOCX files are supported."
+            )
+        
+        # Prepare candidate info
         candidate_info = {}
-        if request.candidate_info:
-            if request.candidate_info.github_url:
-                candidate_info['github_url'] = request.candidate_info.github_url
-            if request.candidate_info.linkedin_url:
-                candidate_info['linkedin_url'] = request.candidate_info.linkedin_url
-            if request.candidate_info.portfolio_url:
-                candidate_info['portfolio_url'] = request.candidate_info.portfolio_url
+        if github_url:
+            candidate_info['github_url'] = github_url
+        if linkedin_url:
+            candidate_info['linkedin_url'] = linkedin_url
+        if portfolio_url:
+            candidate_info['portfolio_url'] = portfolio_url
         
         # Process candidate scoring
         resume_text, file_bytes, evaluation_result = await scoring_service.score_candidate(
-            resume_file=request.resume_file,
-            file_type=request.file_type,
-            job_description=request.job_description,
-            candidate_info=candidate_info,
-            resume_filename=f"resume.{request.file_type}"
+            resume_file=resume_file,
+            job_description=job_description,
+            candidate_info=candidate_info if candidate_info else None
         )
         
         # Save candidate to database
         candidate = Candidate(
             resume_text=resume_text,
-            resume_filename=f"resume.{request.file_type}",
+            resume_filename=resume_file.filename,
             original_file=file_bytes,
-            job_description=request.job_description
+            job_description=job_description
         )
         candidate.set_profile_urls(candidate_info)
         
@@ -153,7 +170,7 @@ async def score_candidate(
         if evaluation_result.get('bias_analysis'):
             bias_track = BiasTracking(
                 evaluation_id=evaluation.id,
-                job_description=request.job_description
+                job_description=job_description
             )
             bias_track.set_bias_flags({
                 'analysis': evaluation_result['bias_analysis'],

@@ -58,7 +58,7 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
     client = genai.Client(
         api_key=config("GEMINI_API_KEY", default=""),
     )
-    model = config("GEMINI_MODEL", default="gemini-2.5-pro-exp-03-25")
+    model = config("GEMINI_MODEL", default="gemini-2.5-flash-preview-04-17")
     # model = config("GEMINI_MODEL", default="gemini-2.5-flash-preview-04-17")
     
     response = client.models.generate_content(model=model, contents=[prompt])

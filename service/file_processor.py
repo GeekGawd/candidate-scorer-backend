@@ -5,6 +5,7 @@ import logging
 from pypdf import PdfReader
 from docx import Document
 import re
+from fastapi import UploadFile
 
 logger = logging.getLogger(__name__)
 
@@ -12,19 +13,10 @@ class FileProcessor:
     """Service for processing uploaded resume files"""
     
     @staticmethod
-    def decode_base64_file(file_content: str, file_type: str) -> bytes:
-        """Decode base64 file content to bytes"""
-        try:
-            return base64.b64decode(file_content)
-        except Exception as e:
-            logger.error(f"Failed to decode base64 content: {e}")
-            raise ValueError("Invalid base64 file content")
-    
-    @staticmethod
-    def extract_text_from_pdf(file_bytes: bytes) -> str:
+    async def extract_text_from_pdf(file_content: bytes) -> str:
         """Extract text from PDF file"""
         try:
-            pdf_stream = io.BytesIO(file_bytes)
+            pdf_stream = io.BytesIO(file_content)
             reader = PdfReader(pdf_stream)
             
             text = ""
@@ -39,10 +31,10 @@ class FileProcessor:
             raise ValueError("Failed to process PDF file")
     
     @staticmethod
-    def extract_text_from_docx(file_bytes: bytes) -> str:
+    async def extract_text_from_docx(file_content: bytes) -> str:
         """Extract text from Word document"""
         try:
-            doc_stream = io.BytesIO(file_bytes)
+            doc_stream = io.BytesIO(file_content)
             doc = Document(doc_stream)
             
             text = ""
@@ -80,31 +72,44 @@ class FileProcessor:
         return text.strip()
     
     @classmethod
-    def process_resume_file(cls, file_content: str, file_type: str, filename: Optional[str] = None) -> Tuple[str, bytes]:
+    async def process_resume_file(cls, upload_file: UploadFile) -> Tuple[str, bytes]:
         """
         Process uploaded resume file and extract text
         
         Args:
-            file_content: Base64 encoded file content
-            file_type: File type ('pdf' or 'docx')
-            filename: Original filename (optional)
+            upload_file: FastAPI UploadFile object
         
         Returns:
             Tuple of (extracted_text, original_file_bytes)
         """
-        if file_type.lower() not in ['pdf', 'docx']:
+        # Validate file type
+        if not upload_file.filename:
+            raise ValueError("No filename provided")
+        
+        file_extension = upload_file.filename.lower().split('.')[-1]
+        if file_extension not in ['pdf', 'docx']:
             raise ValueError("Unsupported file type. Only PDF and DOCX are supported.")
         
-        # Decode file
-        file_bytes = cls.decode_base64_file(file_content, file_type)
+        # Read file content
+        try:
+            file_content = await upload_file.read()
+            if not file_content:
+                raise ValueError("Empty file uploaded")
+        except Exception as e:
+            logger.error(f"Failed to read uploaded file: {e}")
+            raise ValueError("Failed to read uploaded file")
         
         # Extract text based on file type
-        if file_type.lower() == 'pdf':
-            text = cls.extract_text_from_pdf(file_bytes)
-        elif file_type.lower() == 'docx':
-            text = cls.extract_text_from_docx(file_bytes)
-        else:
-            raise ValueError(f"Unsupported file type: {file_type}")
+        try:
+            if file_extension == 'pdf':
+                text = await cls.extract_text_from_pdf(file_content)
+            elif file_extension == 'docx':
+                text = await cls.extract_text_from_docx(file_content)
+            else:
+                raise ValueError(f"Unsupported file type: {file_extension}")
+        except Exception as e:
+            logger.error(f"Failed to extract text from {file_extension}: {e}")
+            raise ValueError(f"Failed to process {file_extension} file: {e}")
         
         # Clean the extracted text
         cleaned_text = cls.clean_text(text)
@@ -112,6 +117,15 @@ class FileProcessor:
         if not cleaned_text:
             raise ValueError("No text could be extracted from the file")
         
-        logger.info(f"Successfully extracted {len(cleaned_text)} characters from {file_type} file")
+        logger.info(f"Successfully extracted {len(cleaned_text)} characters from {file_extension} file: {upload_file.filename}")
         
-        return cleaned_text, file_bytes 
+        return cleaned_text, file_content
+    
+    @staticmethod
+    def validate_file_size(upload_file: UploadFile, max_size_mb: int = 10) -> bool:
+        """Validate file size (this needs to be called before reading the file)"""
+        if hasattr(upload_file, 'size') and upload_file.size:
+            max_size_bytes = max_size_mb * 1024 * 1024
+            if upload_file.size > max_size_bytes:
+                raise ValueError(f"File size exceeds {max_size_mb}MB limit")
+        return True 
