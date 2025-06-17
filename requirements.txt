@@ -13,3 +13,6 @@ lxml
 aiofiles
 httpx
 reportlab 
+streamlit
+pandas
+pdfplumber 
