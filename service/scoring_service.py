@@ -25,12 +25,12 @@ class ScoringService:
         candidate_info: Optional[Dict[str, str]] = None
     ) -> Tuple[str, bytes, Dict[str, Any]]:
         """
-        Complete candidate scoring workflow
+        Complete candidate scoring workflow with automatic URL extraction
         
         Args:
             resume_file: FastAPI UploadFile object
             job_description: Job description text
-            candidate_info: Optional candidate profile URLs
+            candidate_info: Optional manually provided candidate profile URLs (will be merged with auto-extracted)
         
         Returns:
             Tuple of (resume_text, file_bytes, evaluation_result)
@@ -45,20 +45,46 @@ class ScoringService:
             # Extract text and get file content
             resume_text, file_bytes = await self.file_processor.process_resume_file(resume_file)
             
-            # Step 2: Verify candidate profiles (if provided)
+            # Step 2: Extract candidate name from resume text
+            logger.info("Extracting candidate name from resume text...")
+            extracted_name = self.llm_service.extract_candidate_name(resume_text)
+            
+            # Step 3: Extract social URLs automatically from resume text
+            logger.info("Extracting social URLs from resume text...")
+            extracted_urls = self.llm_service.extract_social_urls(resume_text)
+            
+            # Merge manually provided URLs with auto-extracted ones (manual takes precedence)
+            final_candidate_info = {}
+            if extracted_urls.get('github_url'):
+                final_candidate_info['github_url'] = extracted_urls['github_url']
+            if extracted_urls.get('linkedin_url'):
+                final_candidate_info['linkedin_url'] = extracted_urls['linkedin_url']
+            if extracted_urls.get('portfolio_url'):
+                final_candidate_info['portfolio_url'] = extracted_urls['portfolio_url']
+            
+            # Override with manually provided URLs if available
+            if candidate_info:
+                for key, value in candidate_info.items():
+                    if value and value.strip():  # Only override if manually provided value is not empty
+                        final_candidate_info[key] = value
+            
+            logger.info(f"Final candidate URLs: {list(final_candidate_info.keys())}")
+            logger.info(f"Extracted candidate name: {extracted_name.get('full_name', 'N/A')}")
+            
+            # Step 4: Verify candidate profiles (if any URLs available)
             verification_data = {}
             verification_summary = "No profile verification performed"
             
-            if candidate_info:
+            if final_candidate_info:
                 logger.info("Verifying candidate profiles...")
                 try:
-                    verification_data = self.verification_service.verify_candidate_profiles(candidate_info)
+                    verification_data = self.verification_service.verify_candidate_profiles(final_candidate_info)
                     verification_summary = verification_data.get('summary', 'Profile verification completed')
                 except Exception as e:
                     logger.warning(f"Profile verification failed: {e}")
                     verification_summary = "Profile verification failed"
             
-            # Step 3: Perform LLM evaluation
+            # Step 5: Perform LLM evaluation
             logger.info("Performing LLM evaluation...")
             evaluation_result = self.llm_service.evaluate_candidate(
                 resume_text=resume_text,
@@ -66,7 +92,7 @@ class ScoringService:
                 verification_data=verification_data
             )
             
-            # Step 4: Analyze bias
+            # Step 6: Analyze bias
             logger.info("Analyzing potential bias...")
             try:
                 bias_analysis_result = self.llm_service.analyze_bias(
@@ -78,11 +104,11 @@ class ScoringService:
                 logger.warning(f"Bias analysis failed: {e}")
                 bias_analysis = "Bias analysis failed"
             
-            # Step 5: Generate visualization data
+            # Step 7: Generate visualization data
             logger.info("Generating visualization data...")
             visualization_data = self._generate_visualization_data(evaluation_result)
             
-            # Step 6: Compile final result
+            # Step 8: Compile final result
             final_result = {
                 'total_score': evaluation_result.get('total_score', 0.0),
                 'detailed_scores': self._format_detailed_scores(evaluation_result.get('detailed_scores', {})),
@@ -93,7 +119,10 @@ class ScoringService:
                 'visualization_data': visualization_data,
                 'strengths': evaluation_result.get('strengths', []),
                 'weaknesses': evaluation_result.get('weaknesses', []),
-                'raw_evaluation': evaluation_result  # Store raw LLM output
+                'raw_evaluation': evaluation_result,  # Store raw LLM output
+                'extracted_urls': extracted_urls,  # Include URL extraction results
+                'final_candidate_info': final_candidate_info,  # Include final merged URLs
+                'extracted_name': extracted_name  # Include extracted name data
             }
             
             logger.info(f"Candidate scoring completed. Total score: {final_result['total_score']}")

@@ -1,12 +1,14 @@
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Form
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
 
 # Import schemas and models
-from schemas import ScoreResponse, ErrorResponse
+from schemas import ScoreResponse, ErrorResponse, ExtractedUrls, ExtractedName
 from models import Candidate, EvaluationResult, BiasTracking
 from database import get_db, create_tables
 from service.scoring_service import ScoringService
@@ -48,6 +50,31 @@ app.add_middleware(
 # Initialize services
 scoring_service = ScoringService()
 
+# Custom exception handler for validation errors
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """
+    Custom handler for validation errors to prevent binary data exposure
+    """
+    # Filter out any errors that might contain binary data
+    safe_errors = []
+    for error in exc.errors():
+        safe_error = {
+            "type": error.get("type", "validation_error"),
+            "loc": error.get("loc", []),
+            "msg": error.get("msg", "Validation error")
+        }
+        # Don't include the actual input value to avoid binary data
+        safe_errors.append(safe_error)
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": safe_errors,
+            "message": "Request validation failed. Please check your file and form data."
+        }
+    )
+
 @app.get("/")
 async def root():
     """Root endpoint with system information"""
@@ -55,8 +82,15 @@ async def root():
         "message": "Candidate Ranking System API",
         "version": "1.0.0",
         "status": "running",
+        "features": [
+            "AI-powered candidate evaluation",
+            "Automatic candidate name extraction",
+            "Automatic social URL extraction from resumes",
+            "Profile verification and bias analysis",
+            "Comprehensive scoring with detailed breakdowns"
+        ],
         "endpoints": {
-            "score": "/score - POST - Main scoring endpoint (form-data)",
+            "score": "/score - POST - Main scoring endpoint with auto URL extraction (form-data)",
             "health": "/health - GET - Health check",
             "candidates": "/candidates - GET - List evaluated candidates",
             "docs": "/docs - GET - API documentation"
@@ -80,20 +114,25 @@ async def health_check():
 async def score_candidate(
     resume_file: UploadFile = File(..., description="Resume file (PDF or DOCX)"),
     job_description: str = Form(..., description="Job description text"),
-    github_url: Optional[str] = Form(None, description="GitHub profile URL"),
-    linkedin_url: Optional[str] = Form(None, description="LinkedIn profile URL"),
-    portfolio_url: Optional[str] = Form(None, description="Portfolio website URL"),
+    github_url: Optional[str] = Form(None, description="GitHub profile URL (optional - will be auto-extracted from resume if not provided)"),
+    linkedin_url: Optional[str] = Form(None, description="LinkedIn profile URL (optional - will be auto-extracted from resume if not provided)"),
+    portfolio_url: Optional[str] = Form(None, description="Portfolio website URL (optional - will be auto-extracted from resume if not provided)"),
     db: Session = Depends(get_db)
 ):
     """
-    Main candidate scoring endpoint
+    Main candidate scoring endpoint with automatic data extraction
     
-    Upload a resume file and job description to get comprehensive candidate evaluation
+    Upload a resume file and job description to get comprehensive candidate evaluation.
+    The system will automatically extract:
+    - Candidate name from the resume
+    - Social/professional URLs (GitHub, LinkedIn, portfolio)
+    
+    You can optionally provide URLs manually which will override the auto-extracted ones.
     """
     try:
         logger.info(f"Received scoring request for file: {resume_file.filename}")
         
-        # Validate file type
+        # Validate file type early to prevent binary data issues
         if not resume_file.filename:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -107,30 +146,62 @@ async def score_candidate(
                 detail="Unsupported file type. Only PDF and DOCX files are supported."
             )
         
-        # Prepare candidate info
-        candidate_info = {}
-        if github_url:
-            candidate_info['github_url'] = github_url
-        if linkedin_url:
-            candidate_info['linkedin_url'] = linkedin_url
-        if portfolio_url:
-            candidate_info['portfolio_url'] = portfolio_url
+        # Validate file size before processing
+        if hasattr(resume_file, 'size') and resume_file.size:
+            max_size_bytes = 10 * 1024 * 1024  # 10MB
+            if resume_file.size > max_size_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="File size exceeds 10MB limit"
+                )
         
-        # Process candidate scoring
-        resume_text, file_bytes, evaluation_result = await scoring_service.score_candidate(
-            resume_file=resume_file,
-            job_description=job_description,
-            candidate_info=candidate_info if candidate_info else None
-        )
+        # Prepare manually provided candidate info (these will be merged with auto-extracted URLs)
+        manual_candidate_info = {}
+        if github_url:
+            manual_candidate_info['github_url'] = github_url
+        if linkedin_url:
+            manual_candidate_info['linkedin_url'] = linkedin_url
+        if portfolio_url:
+            manual_candidate_info['portfolio_url'] = portfolio_url
+        
+        # Process candidate scoring with proper error handling (includes automatic URL extraction)
+        try:
+            resume_text, file_bytes, evaluation_result = await scoring_service.score_candidate(
+                resume_file=resume_file,
+                job_description=job_description,
+                candidate_info=manual_candidate_info if manual_candidate_info else None
+            )
+        except ValueError as ve:
+            # Handle file processing and validation errors
+            logger.error(f"File processing error: {ve}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(ve)
+            )
+        except Exception as e:
+            # Handle unexpected errors during scoring
+            logger.error(f"Unexpected error during scoring: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to process the resume file. Please ensure the file is valid and try again."
+            )
+        
+        # Get final candidate URLs (combination of auto-extracted and manually provided)
+        final_candidate_urls = evaluation_result.get('final_candidate_info', {})
+        
+        # Get extracted candidate name
+        extracted_name_data = evaluation_result.get('extracted_name', {})
+        candidate_name = extracted_name_data.get('full_name')
         
         # Save candidate to database
         candidate = Candidate(
+            candidate_name=candidate_name,
             resume_text=resume_text,
             resume_filename=resume_file.filename,
             original_file=file_bytes,
             job_description=job_description
         )
-        candidate.set_profile_urls(candidate_info)
+        candidate.set_profile_urls(final_candidate_urls)
         
         db.add(candidate)
         db.commit()
@@ -179,16 +250,41 @@ async def score_candidate(
             db.add(bias_track)
             db.commit()
         
+        # Prepare extracted URLs for response
+        extracted_urls_data = evaluation_result.get('extracted_urls', {})
+        extracted_urls = ExtractedUrls(
+            github_url=extracted_urls_data.get('github_url'),
+            linkedin_url=extracted_urls_data.get('linkedin_url'),
+            portfolio_url=extracted_urls_data.get('portfolio_url'),
+            other_urls=extracted_urls_data.get('other_urls', {}),
+            extracted_count=extracted_urls_data.get('extracted_count', 0),
+            confidence_score=extracted_urls_data.get('confidence_score', 0.0),
+            extraction_notes=extracted_urls_data.get('extraction_notes', '')
+        )
+        
+        # Prepare extracted name for response
+        extracted_name = ExtractedName(
+            full_name=extracted_name_data.get('full_name'),
+            first_name=extracted_name_data.get('first_name'),
+            last_name=extracted_name_data.get('last_name'),
+            confidence_score=extracted_name_data.get('confidence_score', 0.0),
+            extraction_notes=extracted_name_data.get('extraction_notes', '')
+        )
+        
         # Return response
         response = ScoreResponse(
             candidate_id=candidate.id,
+            candidate_name=candidate_name,
             total_score=evaluation_result['total_score'],
             detailed_scores=evaluation_result['detailed_scores'],
             verification_summary=evaluation_result.get('verification_summary'),
             explanation=evaluation_result['explanation'],
             bias_analysis=evaluation_result.get('bias_analysis'),
             recommendations=evaluation_result.get('recommendations', []),
-            visualization_data=evaluation_result['visualization_data']
+            visualization_data=evaluation_result['visualization_data'],
+            extracted_urls=extracted_urls,
+            extracted_name=extracted_name,
+            final_candidate_urls=final_candidate_urls
         )
         
         logger.info(f"Successfully scored candidate {candidate.id} with score {evaluation_result['total_score']}")
@@ -221,6 +317,7 @@ async def list_candidates(
         for candidate in candidates:
             candidate_data = {
                 'id': candidate.id,
+                'candidate_name': candidate.candidate_name,
                 'resume_filename': candidate.resume_filename,
                 'job_description': candidate.job_description[:200] + "..." if len(candidate.job_description) > 200 else candidate.job_description,
                 'created_at': candidate.created_at,

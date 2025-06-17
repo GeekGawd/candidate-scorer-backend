@@ -19,8 +19,25 @@ class VisualizationData(BaseModel):
     bar_chart: List[Dict[str, Any]] = []
     score_breakdown: Dict[str, float] = {}
 
+class ExtractedUrls(BaseModel):
+    github_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    portfolio_url: Optional[str] = None
+    other_urls: Dict[str, str] = {}
+    extracted_count: int = 0
+    confidence_score: float = 0.0
+    extraction_notes: str = ""
+
+class ExtractedName(BaseModel):
+    full_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    confidence_score: float = 0.0
+    extraction_notes: str = ""
+
 class ScoreResponse(BaseModel):
     candidate_id: int
+    candidate_name: Optional[str] = None
     total_score: float = Field(..., ge=0, le=100)
     detailed_scores: Dict[str, DetailedScore]
     verification_summary: Optional[str] = None
@@ -28,6 +45,9 @@ class ScoreResponse(BaseModel):
     bias_analysis: Optional[str] = None
     recommendations: List[str] = []
     visualization_data: VisualizationData
+    extracted_urls: Optional[ExtractedUrls] = None
+    extracted_name: Optional[ExtractedName] = None
+    final_candidate_urls: Dict[str, str] = {}
 
 # Database Models (for ORM)
 class CandidateBase(BaseModel):

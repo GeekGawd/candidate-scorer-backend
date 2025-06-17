@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, LargeBinary
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, LargeBinary, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -10,13 +10,14 @@ class Candidate(Base):
     __tablename__ = "candidate"
     
     id = Column(Integer, primary_key=True, index=True)
+    candidate_name = Column(String, nullable=True)  # Extracted candidate name
     resume_text = Column(Text, nullable=False)
     resume_filename = Column(String, nullable=True)
     original_file = Column(LargeBinary, nullable=True)  # Store original file
     job_description = Column(Text, nullable=False)
     profile_urls = Column(Text, nullable=True)  # JSON string for URLs
     verification_data = Column(Text, nullable=True)  # JSON string for crawled data
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
     
     # Relationship to evaluation results
     evaluations = relationship("EvaluationResult", back_populates="candidate")
@@ -49,7 +50,7 @@ class EvaluationResult(Base):
     bias_analysis = Column(Text, nullable=True)
     recommendations = Column(Text, nullable=True)  # JSON string
     visualization_data = Column(Text, nullable=True)  # JSON string
-    evaluated_at = Column(DateTime, server_default=func.now())
+    evaluated_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
     
     # Relationship to candidate
     candidate = relationship("Candidate", back_populates="evaluations")
@@ -88,7 +89,7 @@ class BiasTracking(Base):
     evaluation_id = Column(Integer, ForeignKey("evaluation_result.id"), nullable=False)
     job_description = Column(Text, nullable=False)
     bias_flags = Column(Text, nullable=True)  # JSON string
-    recorded_at = Column(DateTime, server_default=func.now())
+    recorded_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
     
     # Relationship to evaluation result
     evaluation = relationship("EvaluationResult", back_populates="bias_tracks")
